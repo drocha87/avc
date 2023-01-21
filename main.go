@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"unicode"
 
@@ -11,25 +12,37 @@ import (
 )
 
 type VueFile struct {
-	Folder  string
-	Name    string
-	Content *html.Tokenizer
-	Counter uint32
-	UsedBy  []string
+	Folder        string
+	Name          string
+	KebabCaseName string
+	Tags          []string
+	Counter       uint32
+	UsedBy        []string
+	Recursive     bool
 }
 
 var components []VueFile
 var views []VueFile
 
 func main() {
-	// TODO: check if the src/components folder exists
+	// TODO: check if we are in vue project
+
+	// TODO: check the component also in the component folder
+	// TODO: check for cyclic components
+	// TODO: check for consistency in case on components usage
 
 	CollectVueFiles("src/components", &components)
 	CollectVueFiles("src/views", &views)
 
-	for _, view := range views {
-		for index := range components {
-			CheckVueFileForComponent(view, &components[index])
+	for i := range views {
+		for j := range components {
+			CheckVueFileForComponent(&views[i], &components[j])
+		}
+	}
+
+	for i := range components {
+		for j := range components {
+			CheckVueFileForComponent(&components[i], &components[j])
 		}
 	}
 
@@ -37,6 +50,8 @@ func main() {
 }
 
 func CollectVueFiles(directory string, list *[]VueFile) {
+	// FIXME: handle the case where we import the component in the script section
+
 	files, err := os.ReadDir(directory)
 	if err != nil {
 		panic(fmt.Sprintf("could not read the %s directory", directory))
@@ -51,43 +66,57 @@ func CollectVueFiles(directory string, list *[]VueFile) {
 				if err != nil {
 					panic(fmt.Sprintf("Could not read the content of the vue file %s\n", fullPath))
 				}
+				name := strings.TrimSuffix(f.Name(), ".vue")
 				*list = append(*list, VueFile{
-					Folder:  directory,
-					Name:    strings.TrimSuffix(f.Name(), ".vue"),
-					Content: content,
-					Counter: 0,
+					Folder:        directory,
+					Name:          name,
+					KebabCaseName: VueComponentInKebabCase(name),
+					Tags:          content,
+					Counter:       0,
 				})
 			}
 		}
 	}
 }
 
-func ReadVueFile(file string) (*html.Tokenizer, error) {
+func ReadVueFile(file string) ([]string, error) {
 	bs, err := os.ReadFile(file)
 	if err != nil {
 		return nil, err
 	}
-	return html.NewTokenizer(strings.NewReader(string(bs))), nil
+
+	content := html.NewTokenizer(strings.NewReader(string(bs)))
+	var tags []string
+
+	for {
+		tokenType := content.Next()
+		if tokenType == html.ErrorToken {
+			break
+		}
+
+		// We are interested for now only on open tags
+		if tokenType == html.StartTagToken {
+			token := content.Token()
+			tags = append(tags, token.Data)
+		}
+	}
+	return tags, nil
 }
 
-func CheckVueFileForComponent(file VueFile, component *VueFile) {
-	for {
-		tokenType := file.Content.Next()
-		if tokenType == html.ErrorToken {
-			return
-		}
-		if tokenType == html.StartTagToken {
-			// NOTE: in vue a component like `ComponentA` can be accessed as <ComponentA /> or <component-a></component-a>
-			token := file.Content.Token()
-
-			componentInKebabCase := VueComponentInKebabCase(component.Name)
-			if token.Data == strings.ToLower(component.Name) || token.Data == componentInKebabCase {
-				// keep a distinct list of vue files
-				if !StringSliceContains(component.UsedBy, file.Name) {
-					component.UsedBy = append(component.UsedBy, file.Name)
-				}
-				component.Counter += 1
+func CheckVueFileForComponent(file *VueFile, component *VueFile) {
+	for _, tag := range file.Tags {
+		// NOTE: in vue a component like `ComponentA` can be accessed as <ComponentA /> or <component-a></component-a>
+		if tag == strings.ToLower(component.Name) || tag == component.KebabCaseName {
+			if file == component {
+				// in this case we don't need to keep checking since we already marked it as a recursive component
+				file.Recursive = true
+				return
 			}
+			// keep a distinct list of vue files
+			if !StringSliceContains(component.UsedBy, file.Name) {
+				component.UsedBy = append(component.UsedBy, file.Name)
+			}
+			component.Counter += 1
 		}
 	}
 }
@@ -105,21 +134,24 @@ func VueComponentInKebabCase(name string) string {
 }
 
 func ReportComponentsUsage() {
+	sort.SliceStable(components, func(i, j int) bool {
+		return components[i].Counter > components[j].Counter
+	})
+
 	for _, component := range components {
 		if component.Counter > 0 {
-			fmt.Printf("Component %v.vue is used %v ", component.Name, component.Counter)
+			fmt.Printf("%v.vue: is used %v ", component.Name, component.Counter)
 			if component.Counter > 1 {
-				fmt.Printf("times\n")
+				fmt.Printf("times")
 			} else {
-				fmt.Printf("time\n")
+				fmt.Printf("time")
 			}
-			fmt.Printf("\t")
-			for _, c := range component.UsedBy {
-				fmt.Printf("%v ", c)
+			if component.Recursive {
+				fmt.Printf(" **recursive component**")
 			}
 			fmt.Printf("\n")
 		} else {
-			fmt.Printf("Component %v.vue is not in use\n", component.Name)
+			fmt.Printf("%v.vue: not in use\n", component.Name)
 		}
 	}
 }
