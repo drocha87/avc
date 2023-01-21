@@ -1,6 +1,6 @@
 # Analyze vue components
 
-This project will analyze the `src/components` from your vue project, looking for stats of your components.
+This project will analyze the `src/components` and `src/views` from your vue project, looking for stats of your components.
 
 ## TODO
 
