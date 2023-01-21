@@ -12,7 +12,7 @@ import (
 )
 
 type VueFile struct {
-	Folder        string
+	Path          string
 	Name          string
 	KebabCaseName string
 	Tags          []string
@@ -21,37 +21,53 @@ type VueFile struct {
 	Recursive     bool
 }
 
-var components []VueFile
-var views []VueFile
+func (comp *VueFile) CountComponent(file *VueFile) {
+	for _, tag := range file.Tags {
+		// NOTE: in vue a component like `ComponentA` can be accessed as <ComponentA /> or <component-a></component-a>
+		if tag == strings.ToLower(comp.Name) || tag == comp.KebabCaseName {
+			if file == comp {
+				// in this case we don't need to keep checking since we already marked it as a recursive component
+				file.Recursive = true
+				return
+			}
+			// keep a distinct list of vue files
+			if !StringSliceContains(comp.UsedBy, file.Name) {
+				comp.UsedBy = append(comp.UsedBy, file.Name)
+			}
+			comp.Counter += 1
+		}
+	}
+}
 
 func main() {
+	var components []*VueFile
+	var views []*VueFile
 	// TODO: check if we are in vue project
 
 	// TODO: check the component also in the component folder
 	// TODO: check for cyclic components
 	// TODO: check for consistency in case on components usage
 
-	CollectVueFiles("src/components", &components)
-	CollectVueFiles("src/views", &views)
+	VueFilesFromFolder("src/components", &components)
+	VueFilesFromFolder("src/views", &views)
 
-	for i := range views {
-		for j := range components {
-			CheckVueFileForComponent(&views[i], &components[j])
+	for _, view := range views {
+		for _, comp := range components {
+			comp.CountComponent(view)
 		}
 	}
 
-	for i := range components {
-		for j := range components {
-			CheckVueFileForComponent(&components[i], &components[j])
+	for _, view := range components {
+		for _, comp := range components {
+			comp.CountComponent(view)
 		}
 	}
 
-	ReportComponentsUsage()
+	ReportComponentsUsage(components)
 }
 
-func CollectVueFiles(directory string, list *[]VueFile) {
+func VueFilesFromFolder(directory string, list *[]*VueFile) {
 	// FIXME: handle the case where we import the component in the script section
-
 	files, err := os.ReadDir(directory)
 	if err != nil {
 		panic(fmt.Sprintf("could not read the %s directory", directory))
@@ -59,7 +75,7 @@ func CollectVueFiles(directory string, list *[]VueFile) {
 	for _, f := range files {
 		fullPath := directory + "/" + f.Name()
 		if f.IsDir() {
-			CollectVueFiles(fullPath, list)
+			VueFilesFromFolder(fullPath, list)
 		} else {
 			if path.Ext(f.Name()) == ".vue" {
 				content, err := ReadVueFile(fullPath)
@@ -67,10 +83,10 @@ func CollectVueFiles(directory string, list *[]VueFile) {
 					panic(fmt.Sprintf("Could not read the content of the vue file %s\n", fullPath))
 				}
 				name := strings.TrimSuffix(f.Name(), ".vue")
-				*list = append(*list, VueFile{
-					Folder:        directory,
+				*list = append(*list, &VueFile{
+					Path:          directory,
 					Name:          name,
-					KebabCaseName: VueComponentInKebabCase(name),
+					KebabCaseName: NameInKebabCase(name),
 					Tags:          content,
 					Counter:       0,
 				})
@@ -103,26 +119,8 @@ func ReadVueFile(file string) ([]string, error) {
 	return tags, nil
 }
 
-func CheckVueFileForComponent(file *VueFile, component *VueFile) {
-	for _, tag := range file.Tags {
-		// NOTE: in vue a component like `ComponentA` can be accessed as <ComponentA /> or <component-a></component-a>
-		if tag == strings.ToLower(component.Name) || tag == component.KebabCaseName {
-			if file == component {
-				// in this case we don't need to keep checking since we already marked it as a recursive component
-				file.Recursive = true
-				return
-			}
-			// keep a distinct list of vue files
-			if !StringSliceContains(component.UsedBy, file.Name) {
-				component.UsedBy = append(component.UsedBy, file.Name)
-			}
-			component.Counter += 1
-		}
-	}
-}
-
 // this function generates the kebab-case version of component name
-func VueComponentInKebabCase(name string) string {
+func NameInKebabCase(name string) string {
 	var result []rune
 	for index, ch := range name {
 		if unicode.IsUpper(ch) && index >= 1 {
@@ -133,7 +131,7 @@ func VueComponentInKebabCase(name string) string {
 	return string(result)
 }
 
-func ReportComponentsUsage() {
+func ReportComponentsUsage(components []*VueFile) {
 	sort.SliceStable(components, func(i, j int) bool {
 		return components[i].Counter > components[j].Counter
 	})
